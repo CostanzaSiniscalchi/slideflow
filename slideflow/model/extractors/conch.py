@@ -614,7 +614,8 @@ class AttentionalPooler(nn.Module):
         attn = sim.softmax(dim=-1)
 
         out = einsum('... i j, ... j d -> ... i d', attn, v)
-        out = rearrange(out, 'b h t n (h d) -> b t n (h d)', h=h)
+        # Merge head dimension back: (batch, heads, t, n, head_dim) -> (batch, t, n, heads*head_dim)
+        out = rearrange(out, 'b heads t n d -> b t n (heads d)', heads=h)
         return self.to_out(out).squeeze(dim=1)
 
 
@@ -734,7 +735,7 @@ class ConchV15Features(TorchFeatureExtractor):
     The model uses a Vision Transformer backbone with attentional pooling to generate
     patch embeddings. Default input size is 448x448 pixels (can also use 512x512).
 
-    Feature dimensions: 1024 (raw ViT CLS token, before attentional pooling)
+    Feature dimensions: 768 (after attentional pooling, matches MIL-Lab)
 
     Manuscript: Lu, M. Y., et al. (2024). A visual-language foundation model for
     computational pathology. Nature Medicine.
@@ -777,9 +778,9 @@ class ConchV15Features(TorchFeatureExtractor):
         self._visual_model.to(self.device)
         self._visual_model.eval()
 
-        # CONCH v1.5 Vision Transformer has 1024-dim embeddings (context_dim)
-        # This is the raw CLS token before attentional pooling
-        self.num_features = 1024
+        # CONCH v1.5 outputs 768-dim after attentional pooling
+        # This matches MIL-Lab's expected input dimension
+        self.num_features = 768
 
         # Store the image size and checkpoint path for config serialization
         self.img_size = img_size
@@ -801,22 +802,19 @@ class ConchV15Features(TorchFeatureExtractor):
         self.preprocess_kwargs = dict(standardize=False)
 
     def model(self, x):
-        """Extract features from the vision transformer backbone.
+        """Extract features using full forward pass with attentional pooling.
 
-        For image-only downstream tasks, features should be extracted from the
-        vision transformer backbone before the attentional pooling and contrastive
-        projection. This extracts the CLS token from the final transformer layer.
+        Uses the complete CONCH v1.5 forward pass including the attentional
+        pooler, which produces 768-dim features. This matches the feature
+        dimension expected by MIL-Lab pretrained ABMIL models.
 
         Args:
             x: Input tensor of shape (batch, channels, height, width)
 
         Returns:
-            Tensor of shape (batch, 1024) containing the CLS token features
+            Tensor of shape (batch, 768) containing pooled features
         """
-        # Extract all tokens from the vision transformer
-        x = self._visual_model.trunk(x, return_all_tokens=True)
-        # Return the CLS token (first token) - shape: (batch, 1024)
-        return x[:, 0]
+        return self._visual_model(x)
 
     def _process_output(self, output):
         """Process model output to extract embeddings."""
