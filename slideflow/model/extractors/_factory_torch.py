@@ -26,9 +26,24 @@ def build_torch_feature_extractor(name, **kwargs):
 # -----------------------------------------------------------------------------
 
 @register_torch
+def hoptimus0(**kwargs):
+    from .hoptimus0 import Hoptimus0Features
+    return Hoptimus0Features(**kwargs)
+
+@register_torch
+def hoptimus1(**kwargs):
+    from .hoptimus1 import Hoptimus1Features
+    return Hoptimus1Features(**kwargs)
+
+@register_torch
 def virchow(weights, **kwargs):
     from .virchow import VirchowFeatures
     return VirchowFeatures(weights, **kwargs)
+
+@register_torch
+def virchow2(weights, **kwargs):
+    from .virchow2 import Virchow2Features
+    return Virchow2Features(weights, **kwargs)
 
 @register_torch
 def vit(**kwargs):
