@@ -756,6 +756,7 @@ class ConchV15Features(TorchFeatureExtractor):
   publisher={Nature Publishing Group}
 }
 """
+    mixed_precision = False
 
     def __init__(self, checkpoint_path: str, img_size: int = 448, device=None, **kwargs):
         """Initialize CONCH v1.5 feature extractor.
@@ -775,7 +776,7 @@ class ConchV15Features(TorchFeatureExtractor):
         # Build CONCH v1.5 using the reference implementation
         self._visual_model, self.eval_transform = build_conch(checkpoint_path, img_size=img_size)
 
-        self._visual_model.to(self.device)
+        self._visual_model = self._visual_model.to(self.device).float()
         self._visual_model.eval()
 
         # CONCH v1.5 outputs 768-dim after attentional pooling
