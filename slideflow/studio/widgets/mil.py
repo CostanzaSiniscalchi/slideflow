@@ -146,6 +146,9 @@ class MILWidget(Widget):
         self.predictions = None
         self.attention = None
 
+        # Feature directory for masked bag generation.
+        self._features_dir = None
+
         # Internals.
         self._mil_path = None
         self._show_mil_params = None
@@ -356,6 +359,10 @@ class MILWidget(Widget):
             self.mil_params = _params
             self.mil_config = _cfg
             self.extractor_params = self.mil_params['bags_extractor']
+            if self._features_dir is None and 'bags' in _params:
+                candidate = _params['bags']
+                if os.path.isdir(candidate):
+                    self._features_dir = candidate
 
             if is_multimodal:
                 return self._load_multimodal_model(path, allow_errors=allow_errors)
@@ -872,6 +879,19 @@ class MILWidget(Widget):
                 if viz.sidebar.full_button(predict_text, enabled=predict_enabled):
                     self.predict_slide()
                 
+                # Features directory selector for "Load and Predict"
+                feat_dir_display = self._features_dir if self._features_dir else "(none)"
+                imgui.text("Features dir:")
+                imgui.same_line()
+                imgui.set_next_item_width(viz.font_size * 8)
+                _, feat_dir_display = imgui.input_text('##features_dir', feat_dir_display, 512,
+                                                        imgui.INPUT_TEXT_READ_ONLY)
+                imgui.same_line()
+                if viz.sidebar.small_button('ellipsis'):
+                    chosen = askdirectory(title="Select features directory...")
+                    if chosen:
+                        self._features_dir = chosen
+
                 # Add Load and Predict button
                 load_predict_enabled = (viz.wsi is not None
                                       and self.model_loaded
@@ -905,6 +925,66 @@ class MILWidget(Widget):
                 is_classification=self.is_classification()
             )
             viz.set_prediction_message(pred_str)
+
+    def _build_masked_bags_from_features(self, slide_name: str) -> Optional[np.ndarray]:
+        """Build a masked bag array from pre-extracted .pt feature files.
+
+        Loads {features_dir}/{slide_name}.pt and the corresponding .index.npz,
+        then reconstructs the (H, W, n_feats) masked array using tile pixel
+        locations to determine the spatial grid.
+
+        Args:
+            slide_name: Slide name without extension.
+
+        Returns:
+            Optional[np.ndarray]: Masked array of shape (H, W, n_feats), or None on failure.
+        """
+        import torch
+
+        if not self._features_dir:
+            return None
+
+        pt_path = os.path.join(self._features_dir, f"{slide_name}.pt")
+        idx_path = os.path.join(self._features_dir, f"{slide_name}.index.npz")
+
+        if not os.path.exists(pt_path):
+            self.viz.create_toast(f"No feature file found for {slide_name}", icon='error')
+            return None
+        if not os.path.exists(idx_path):
+            self.viz.create_toast(f"No index file found for {slide_name}", icon='error')
+            return None
+
+        try:
+            feats = torch.load(pt_path, map_location='cpu').numpy()  # (N, D)
+            idx = np.load(idx_path)
+            locs = idx['locations']  # (N, 2) pixel coordinates (x, y)
+
+            # Determine grid stride as the minimum non-zero difference between
+            # unique x-coordinates.
+            unique_x = np.unique(locs[:, 0])
+            stride = int(np.diff(unique_x).min()) if len(unique_x) > 1 else 1
+
+            # Use absolute grid indices (no x_min/y_min subtraction) so that
+            # the grid origin aligns with WSI coordinate (0, 0), matching the
+            # assumption in set_grid_overlay (which places the overlay at 0,0).
+            cols = locs[:, 0] // stride  # x → cols (second dim)
+            rows = locs[:, 1] // stride  # y → rows (first dim)
+
+            n_rows = int(rows.max()) + 1
+            n_cols = int(cols.max()) + 1
+            n_feats = feats.shape[1]
+
+            data = np.zeros((n_rows, n_cols, n_feats), dtype=np.float32)
+            mask = np.ones((n_rows, n_cols, n_feats), dtype=bool)
+
+            data[rows, cols] = feats
+            mask[rows, cols] = False
+
+            return np.ma.MaskedArray(data=data, mask=mask)
+
+        except Exception as e:
+            self.viz.create_toast(f"Error building masked bags: {str(e)}", icon='error')
+            return None
 
     def _load_masked_bags(self, slide_name: str) -> Optional[np.ndarray]:
         """Load pre-computed masked bags for a slide.
@@ -949,8 +1029,10 @@ class MILWidget(Widget):
         # Get slide name without extension
         slide_name = os.path.splitext(os.path.basename(self.viz.wsi.path))[0]
 
-        # Load pre-computed masked bags
-        masked_bags = self._load_masked_bags(slide_name)
+        # Load pre-computed masked bags: prefer feature dir, fall back to masked_bags/
+        masked_bags = self._build_masked_bags_from_features(slide_name)
+        if masked_bags is None:
+            masked_bags = self._load_masked_bags(slide_name)
 
         if masked_bags is None:
             self._generating = False
@@ -970,6 +1052,18 @@ class MILWidget(Widget):
         bags = np.expand_dims(bags, axis=0).astype(np.float32)
 
         sf.log.info("Loaded feature bags for {} tiles".format(bags.shape[1]))
+
+        # Validate feature dimension against model input shape
+        expected_dim = self.mil_params.get('input_shape')
+        if expected_dim is not None and bags.shape[2] != expected_dim:
+            self.viz.create_toast(
+                f"Feature dimension mismatch: bags have {bags.shape[2]} dims "
+                f"but model expects {expected_dim}. Select the correct features directory.",
+                icon='error'
+            )
+            self._generating = False
+            self._triggered = False
+            return
 
         # Generate slide-level prediction and attention
         self.predictions, self.attention = self._calculate_predictions(bags)

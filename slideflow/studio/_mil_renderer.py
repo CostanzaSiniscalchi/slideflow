@@ -106,6 +106,9 @@ class MILRenderer(Renderer):
             if not res.in_focus:
                 return
 
+        if self.extractor is None:
+            return
+
         bag = self._convert_img_to_bag(img, res)
         preds, att = self._predict_bag(bag, attention=True)
         if isinstance(att, list):
