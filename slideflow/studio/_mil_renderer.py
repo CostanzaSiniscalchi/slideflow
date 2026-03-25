@@ -21,24 +21,27 @@ if sf.util.torch_available:
 
 class MILRenderer(Renderer):
 
-    def __init__(self, *args, mil_model_path: Optional[str] = None, **kwargs):
+    def __init__(self, *args, mil_model_path: Optional[str] = None, load_extractor: bool = True, **kwargs):
         super().__init__(*args, **kwargs)
         self.mil_model = None
         self.mil_config = None
         self.extractor = None
         self.normalizer = None
         if mil_model_path:
-            self.load_model(mil_model_path)
+            self.load_model(mil_model_path, load_extractor=load_extractor)
 
-    def load_model(self, mil_model_path: str, device: Optional[str] = None) -> None:
+    def load_model(self, mil_model_path: str, device: Optional[str] = None, load_extractor: bool = True) -> None:
         sf.log.info("Loading MIL model at {}".format(mil_model_path))
         if device is None:
             from slideflow.model import torch_utils
             device = torch_utils.get_device()
         self.device = device
-        self.extractor, self.normalizer = rebuild_extractor(
-            mil_model_path, native_normalizer=(sf.slide_backend()=='cucim')
-        )
+        if load_extractor:
+            self.extractor, self.normalizer = rebuild_extractor(
+                mil_model_path, native_normalizer=(sf.slide_backend()=='cucim')
+            )
+        else:
+            sf.log.info("Skipping feature extractor loading")
         self.mil_model, self.mil_config = sf.mil.utils.load_model_weights(mil_model_path)
         self.mil_model.to(self.device)
         self._model = self.mil_model

@@ -9,6 +9,7 @@ import os
 from scipy.special import softmax
 
 from functools import partial
+from tkinter import messagebox
 from tkinter.filedialog import askdirectory
 from os.path import join, exists, dirname, abspath
 from typing import Dict, Optional, List, Union
@@ -253,7 +254,14 @@ class MILWidget(Widget):
         """Prompt the user to open an MIL model."""
         mil_path = askdirectory(title="Load MIL Model (directory)...")
         if mil_path:
-            self.load(mil_path)
+            load_extractor = messagebox.askyesno(
+                "Load Feature Extractor?",
+                "Load the feature extractor?\n\n"
+                "Yes: Enables real-time slide prediction (Predict Slide).\n"
+                "No: Only pre-computed bag prediction (Load and Predict) "
+                "will be available."
+            )
+            self.load(mil_path, load_extractor=load_extractor)
 
     def _load_multimodal_model(self, path: str, allow_errors: bool = True) -> bool:
         try:
@@ -309,7 +317,7 @@ class MILWidget(Widget):
             raise e
         return True
 
-    def _load_model(self, path: str) -> bool:
+    def _load_model(self, path: str, load_extractor: bool = True) -> bool:
         """Load a standard MIL model from a given path."""
         if self.viz.wsi:
             self.viz.reload_wsi(
@@ -326,13 +334,15 @@ class MILWidget(Widget):
             self.viz.viewer.set_tile_um(self.viz.tile_um)
 
         # Add MIL renderer to the render pipeline.
-        self.viz._render_manager.set_renderer(MILRenderer, mil_model_path=path)
+        self.viz._render_manager.set_renderer(
+            MILRenderer, mil_model_path=path, load_extractor=load_extractor
+        )
         self.viz._model_path = path
         self._mil_path = path
         self.viz.create_toast('MIL model loaded', icon='success')
         return True
 
-    def load(self, path: str, allow_errors: bool = True) -> bool:
+    def load(self, path: str, allow_errors: bool = True, load_extractor: bool = True) -> bool:
         try:
             # First, check if we need to switch the renderer.
             _params = _get_mil_params(path)
@@ -350,7 +360,7 @@ class MILWidget(Widget):
             if is_multimodal:
                 return self._load_multimodal_model(path, allow_errors=allow_errors)
             else:
-                return self._load_model(path)
+                return self._load_model(path, load_extractor=load_extractor)
 
         except Exception as e:
             if allow_errors:
@@ -856,7 +866,8 @@ class MILWidget(Widget):
                 self.draw_prediction()
                 predict_enabled = (viz.wsi is not None
                                    and self.model_loaded
-                                   and not self._triggered)
+                                   and not self._triggered
+                                   and self.extractor is not None)
                 predict_text = "Predict Slide" if not self._triggered else f"Calculating{imgui_utils.spinner_text()}"
                 if viz.sidebar.full_button(predict_text, enabled=predict_enabled):
                     self.predict_slide()
