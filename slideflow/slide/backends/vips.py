@@ -204,15 +204,13 @@ def detect_mpp(
     # Search for MPP via TIFF EXIF field
     if (sf.util.path_to_ext(path).lower() in ('tif', 'tiff')
             and 'xres' in vips_fields):
-        xres = loaded_image.get('xres')  # 4000.0
-        if (xres == 4000.0
+        xres = loaded_image.get('xres')
+        if (xres and xres > 0
             and 'resolution-unit' in vips_fields
             and loaded_image.get('resolution-unit') == 'cm'):
-            # xres = xres # though resolution from tiffinfo
-            # says 40000 pixels/cm, for some reason the xres
-            # val is 4000.0, so multiply by 10.
-            # Convert from pixels/cm to cm/pixels, then convert
-            # to microns by multiplying by 1000
+            # xres is pixels/mm in libvips (vips internally
+            # converts pixels/cm to pixels/mm).
+            # Convert to microns/pixel: (1/xres) mm/px * 1000 µm/mm
             mpp_x = (1/xres) * 1000
             log.debug(
                 f"Using MPP {mpp_x} per TIFF 'xres' field"
@@ -221,21 +219,32 @@ def detect_mpp(
             )
             return mpp_x
 
-    # Search for MPP within OME-TIFF format
-    if path.endswith('.ome.tif') or path.endswith('.ome.tiff'):
-        xml_str = loaded_image.get('image-description')
-        root = ET.fromstring(xml_str)
-        main_idx = get_main_index_from_xml(root)
-        try:
-            pixels_idx = [i for i, x in enumerate(root[main_idx]) if x.tag.endswith('Pixels')][0]
-            mpp_x = float(root[main_idx][pixels_idx].attrib['PhysicalSizeX'])
-            log.debug(
-                f"Using MPP {mpp_x} per OME-TIFF PhysicalSizeX field"
-            )
-            return mpp_x
-        except Exception as e:
-            log.warning(f"Unable to read OME-TIFF PhysicalSizeX field. Error: {e}")
-            pass
+    # Search for MPP within OME-TIFF format (or plain TIF with OME-XML metadata)
+    if (path.endswith('.ome.tif') or path.endswith('.ome.tiff')
+            or sf.util.path_to_ext(path).lower() in ('tif', 'tiff')):
+        if 'image-description' in vips_fields:
+            xml_str = loaded_image.get('image-description')
+            if 'PhysicalSizeX' in xml_str:
+                # First try full OME-XML parsing
+                try:
+                    root = ET.fromstring(xml_str)
+                    main_idx = get_main_index_from_xml(root)
+                    pixels_idx = [i for i, x in enumerate(root[main_idx]) if x.tag.endswith('Pixels')][0]
+                    mpp_x = float(root[main_idx][pixels_idx].attrib['PhysicalSizeX'])
+                    log.debug(
+                        f"Using MPP {mpp_x} per OME-TIFF PhysicalSizeX field"
+                    )
+                    return mpp_x
+                except Exception:
+                    pass
+                # Fallback: regex extraction from image-description
+                match = re.search(r'PhysicalSizeX="([^"]+)"', xml_str)
+                if match:
+                    mpp_x = float(match.group(1))
+                    log.debug(
+                        f"Using MPP {mpp_x} per PhysicalSizeX regex from image-description"
+                    )
+                    return mpp_x
 
     # --- Search EXIF & tags ------------------------------------------
     try:
