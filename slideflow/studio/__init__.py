@@ -117,6 +117,7 @@ class Studio(ImguiWindow):
         self._suspend_keyboard_input    = False
         self._status_message            = None
         self._force_enable_tile_preview = False
+        self._prev_right_clicking       = False
 
         # Interface.
         self._show_about                = False
@@ -442,14 +443,23 @@ class Studio(ImguiWindow):
             self.viewer.render_overlay_tooltip(self.overlay_original)
 
         # Calculate location for model display.
-        if (self.tile_preview_enabled
-            and inp.clicking
-            and not inp.dragging
-            and self.viewer.is_in_view(inp.cx, inp.cy)):
+        _valid_right_click = (self.tile_preview_enabled
+                              and inp.clicking
+                              and not inp.dragging
+                              and self.viewer.is_in_view(inp.cx, inp.cy))
 
+        if _valid_right_click:
             wsi_x, wsi_y = self.viewer.display_coords_to_wsi_coords(inp.cx, inp.cy, offset=False)
             self.x = wsi_x - (self.viewer.full_extract_px/2)
             self.y = wsi_y - (self.viewer.full_extract_px/2)
+            # Re-open the tile preview if it was closed (e.g. user pressed X).
+            self._show_tile_preview = True
+            # On a fresh right-click press within the slide view, clear the render
+            # cache so a new prediction is always computed.
+            if not self._prev_right_clicking:
+                self._render_manager.clear_result()
+
+        self._prev_right_clicking = _valid_right_click
 
         # Show box around location that a tile is being extracted for preview.
         if self.x is not None and self.y is not None:

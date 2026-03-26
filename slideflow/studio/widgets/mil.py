@@ -173,6 +173,7 @@ class MILWidget(Widget):
                 self._toast.done()
                 self._toast = None
             self.viz.create_toast("Prediction complete.", icon='success')
+            self.viz._show_tile_preview = True
 
     def _before_model_load(self):
         """Trigger for when the user loads a tile-based model."""
@@ -1093,12 +1094,26 @@ class MILWidget(Widget):
         else:
             self.attention = None
 
-        # Generate tile-level predictions
-        # Reshape the bags from (1, n_bags, n_feats) to (n_bags, 1, n_feats)
+        # Generate tile-level predictions in a single batched forward pass.
+        # Reshape (1, N, D) → (N, 1, D) and call run_inference once instead
+        # of N times (as predict_from_bags would do).
+        import torch
+        from slideflow.mil.eval import run_inference
+        device = self.viz._render_manager.device
+        use_lens = self.mil_params.get('params', {}).get('use_lens', False)
         reshaped_bags = np.reshape(bags, (bags.shape[1], 1, bags.shape[2]))
-        tile_predictions, _ = self._calculate_predictions(reshaped_bags)
+        bags_tensor = torch.from_numpy(reshaped_bags).to(device)
+        with torch.inference_mode():
+            tile_preds, _, _ = run_inference(
+                self.model,
+                bags_tensor,
+                attention=False,
+                device=device,
+                use_lens=use_lens,
+            )
+        tile_predictions = tile_preds.cpu().numpy()
 
-        # Create heatmaps from tile predictions and attention
+        # Create heatmaps from tile predictions and attention.
         if len(tile_predictions.shape) == 2:
             tile_heatmap = np.stack([
                 _reshape_as_heatmap(tile_predictions[:, n], valid_indices, original_shape, masked_bags.shape[0])
