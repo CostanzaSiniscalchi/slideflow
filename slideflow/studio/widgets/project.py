@@ -3,6 +3,7 @@ import os
 import imgui
 import glfw
 from os.path import basename
+from tkinter import messagebox
 from tkinter.filedialog import askopenfilename, askdirectory
 
 from .._renderer import CapturedException
@@ -247,6 +248,74 @@ class ProjectWidget:
 
         items = sorted(items, key=lambda item: (item.name.replace('_', ' '), item.path))
         return items
+
+    def _list_mil_models(self, parents):
+        items = []
+        run_regex = re.compile(r'\d+-.*')
+        for parent in set(parents):
+            if os.path.isdir(parent):
+                for entry in os.scandir(parent):
+                    if entry.is_dir() and os.path.isfile(os.path.join(parent, entry.name, 'mil_params.json')):
+                        items.append(EasyDict(type='model', name=entry.name, path=os.path.join(parent, entry.name)))
+                    elif entry.is_dir() and run_regex.fullmatch(entry.name):
+                        items.append(EasyDict(type='run', name=entry.name, path=os.path.join(parent, entry.name)))
+                    elif entry.is_dir():
+                        items.append(EasyDict(type='folder', name=entry.name, path=os.path.join(parent, entry.name)))
+        items = sorted(items, key=lambda item: (item.name.replace('_', ' '), item.path))
+        return items
+
+    def recursive_mil_scan(self):
+        viz = self.viz
+
+        def recurse(parents, dryrun=False):
+            key = ('mil',) + tuple(parents)
+            items = self.browse_cache.get(key, None)
+            if items is None:
+                items = self._list_mil_models(parents)
+                self.browse_cache[key] = items
+
+            has_model = False
+            recurse_checks = []
+
+            for item in items:
+                if item.type in ('run', 'folder'):
+                    _recurse_has_models = recurse([item.path], dryrun=True)
+                    recurse_checks.append(_recurse_has_models)
+                    if _recurse_has_models and not dryrun and imgui.tree_node(item.name):
+                        recurse([item.path])
+                        imgui.tree_pop()
+                if item.type == 'model':
+                    has_model = True
+                    if not dryrun:
+                        clicked, _state = imgui.menu_item(item.name)
+                        if clicked:
+                            self._load_mil_from_browser(item.path)
+
+            return any(recurse_checks) or has_model
+
+        mil_dir = os.path.join(self.P.root, 'mil')
+        if not os.path.isdir(mil_dir):
+            return False
+        result = recurse([mil_dir])
+        if self.browse_refocus:
+            imgui.set_scroll_here()
+            viz.skip_frame()
+            self.browse_refocus = False
+        return result
+
+    def _load_mil_from_browser(self, path):
+        viz = self.viz
+        if not hasattr(viz, 'mil_widget'):
+            viz.create_toast("MIL extension is not loaded.", icon="error")
+            return
+        load_extractor = messagebox.askyesno(
+            "Load Feature Extractor?",
+            "Load the feature extractor?\n\n"
+            "Yes: Enables real-time slide prediction (Predict Slide).\n"
+            "No: Only pre-computed bag prediction (Load and Predict) "
+            "will be available."
+        )
+        viz.mil_widget.load(path, load_extractor=load_extractor)
 
     def get_path_input_width(self) -> float:
         return imgui.get_content_region_max()[0] - self.label_width - self.button_width - self.viz.spacing
@@ -647,3 +716,8 @@ class ProjectWidget:
             if viz.collapsing_header('Models', default=False):
                 if not self.recursive_model_scan():
                     imgui_utils.padded_text('No models found.', vpad=[int(viz.font_size/2), int(viz.font_size)])
+
+            if hasattr(viz, 'mil_widget'):
+                if viz.collapsing_header('MIL Models', default=False):
+                    if not self.recursive_mil_scan():
+                        imgui_utils.padded_text('No MIL models found.', vpad=[int(viz.font_size/2), int(viz.font_size)])
