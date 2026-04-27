@@ -54,6 +54,7 @@ class TrainerConfig:
         batch_size: int = 64,
         drop_last: bool = True,
         save_monitor: str = 'valid_loss',
+        save_every_epoch: bool = False,
         weighted_loss: bool = True,
         **kwargs
     ):
@@ -86,6 +87,8 @@ class TrainerConfig:
                 learning rate schedule. Defaults to True.
             epochs (int): Maximum number of epochs. Defaults to 32.
             batch_size (int): Batch size. Defaults to 64.
+            save_every_epoch (bool): Save a checkpoint at every epoch to the
+                ``checkpoints/`` subdirectory. Defaults to False.
             **kwargs: All additional keyword arguments are passed to
                 :class:`slideflow.mil.MILModelConfig`.
 
@@ -100,6 +103,7 @@ class TrainerConfig:
         self.batch_size = batch_size
         self.drop_last = drop_last
         self.save_monitor = save_monitor
+        self.save_every_epoch = save_every_epoch
         self.weighted_loss = weighted_loss
         if isinstance(model, str):
             self.model_config = build_model_config(model, **kwargs)
