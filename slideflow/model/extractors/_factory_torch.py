@@ -46,6 +46,11 @@ def conch_v1_5(**kwargs):
     return ConchV15Features(**kwargs)
 
 @register_torch
+def titan(weights=None, **kwargs):
+    from .titan import TitanFeatures
+    return TitanFeatures(weights=weights, **kwargs)
+
+@register_torch
 def vit(**kwargs):
     from .vit import ViTFeatures
     return ViTFeatures(**kwargs)
