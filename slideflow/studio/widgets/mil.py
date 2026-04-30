@@ -149,12 +149,17 @@ class MILWidget(Widget):
         # Feature directory for masked bag generation.
         self._features_dir = None
 
+        # Pixel stride used for the last loaded masked-bag grid.
+        # Populated by _build_masked_bags_from_features when available.
+        self._last_stride_px = None
+
         # Internals.
         self._mil_path = None
         self._show_mil_params = None
         self._rendering_message = "Generating whole-slide prediction..."
         self._generating = False
         self._triggered = False
+        self._active_action = None  # 'predict_slide' or 'load_and_predict' while running
         self._thread = None
         self._toast = None
         self._show_popup = False
@@ -167,6 +172,7 @@ class MILWidget(Widget):
         if self._thread is not None and not self._thread.is_alive():
             self._generating = False
             self._triggered = False
+            self._active_action = None
             self._thread = None
             self.viz.clear_message(self._rendering_message)
             if self._toast is not None:
@@ -249,6 +255,14 @@ class MILWidget(Widget):
         self.viz.heatmap_widget.reset()
         self.viz.clear_prediction_message()
         self.viz.slide_widget.enable_stride_capture = True
+        # Drop any cached per-tile predictions on the renderer.
+        if not close_renderer:
+            try:
+                renderer = self.viz.get_renderer()
+            except Exception:
+                renderer = None
+            if isinstance(renderer, MILRenderer):
+                renderer.set_tile_pred_cache(None, None)
         self._initialize_variables()
         if self.viz._render_manager is not None:
             if close_renderer:
@@ -580,6 +594,7 @@ class MILWidget(Widget):
         """Initiate a whole-slide prediction."""
         if not self.is_multimodal and not self.verify_tile_size():
             return
+        self._active_action = 'predict_slide'
         self.viz.set_message(self._rendering_message)
         self._toast = self.viz.create_toast(
             title="Generating prediction",
@@ -595,6 +610,7 @@ class MILWidget(Widget):
         """Initiate a prediction using pre-computed masked bags."""
         if not self.viz.wsi:
             return
+        self._active_action = 'load_and_predict'
         self.viz.set_message(self._rendering_message)
         self._toast = self.viz.create_toast(
             title="Loading and generating prediction",
@@ -631,6 +647,14 @@ class MILWidget(Widget):
     def is_classification(self) -> bool:
         if self.mil_config is not None:
             return self.mil_config.is_classification() or self.mil_config.model_type == 'hierarchical'
+
+    def is_hierarchical(self) -> bool:
+        """True if the loaded MIL model is the hierarchical variant.
+
+        Reflects ``mil_config.model_type`` (driven by ``mil_params.json``).
+        """
+        return (self.mil_config is not None
+                and getattr(self.mil_config, 'model_type', None) == 'hierarchical')
 
     def render_attention_heatmap(self, attention: np.ndarray) -> None:
         self.viz.heatmap = _AttentionHeatmapWrapper(attention, self.viz.wsi)
@@ -872,14 +896,17 @@ class MILWidget(Widget):
                 self.draw_mil_info()
             if viz.collapsing_header('Whole-slide Prediction', default=True):
                 self.draw_prediction()
+                predict_slide_active = self._active_action == 'predict_slide'
+                load_and_predict_active = self._active_action == 'load_and_predict'
                 predict_enabled = (viz.wsi is not None
                                    and self.model_loaded
                                    and not self._triggered
                                    and self.extractor is not None)
-                predict_text = "Predict Slide" if not self._triggered else f"Calculating{imgui_utils.spinner_text()}"
+                predict_text = (f"Calculating{imgui_utils.spinner_text()}"
+                                if predict_slide_active else "Predict Slide")
                 if viz.sidebar.full_button(predict_text, enabled=predict_enabled):
                     self.predict_slide()
-                
+
                 # Features directory selector for "Load and Predict"
                 feat_dir_display = self._features_dir if self._features_dir else "(none)"
                 imgui.text("Features dir:")
@@ -897,7 +924,8 @@ class MILWidget(Widget):
                 load_predict_enabled = (viz.wsi is not None
                                       and self.model_loaded
                                       and not self._triggered)
-                load_predict_text = "Load and Predict" if not self._triggered else f"Loading{imgui_utils.spinner_text()}"
+                load_predict_text = (f"Loading{imgui_utils.spinner_text()}"
+                                     if load_and_predict_active else "Load and Predict")
                 if viz.sidebar.full_button(load_predict_text, enabled=load_predict_enabled):
                     self.predict_from_masked_bags()
             if viz.collapsing_header('Tile Prediction', default=True):
@@ -907,6 +935,7 @@ class MILWidget(Widget):
                     config=self.mil_params,
                     has_preds=(viz._predictions is not None),
                     using_model=self.model_loaded,
+                    is_hierarchical=self.is_hierarchical(),
                     uncertainty_color=self.uncertainty_color,
                     uncertainty_range=self.uncertainty_range,
                     uncertainty_label="Attention",
@@ -923,9 +952,23 @@ class MILWidget(Widget):
             pred_str = prediction_to_string(
                 predictions=viz._predictions,
                 outcomes=self.mil_params['outcome_labels'],
-                is_classification=self.is_classification()
+                is_classification=self.is_classification(),
+                is_hierarchical=self.is_hierarchical(),
             )
             viz.set_prediction_message(pred_str)
+
+    def _push_tile_pred_cache(self, tile_heatmap: np.ndarray, stride_px: Optional[int]) -> None:
+        """Push the per-tile prediction grid to the renderer so per-tile
+        predictions can be displayed when no feature extractor is loaded.
+        """
+        if stride_px is None or stride_px <= 0:
+            return
+        try:
+            renderer = self.viz.get_renderer()
+        except Exception:
+            return
+        if isinstance(renderer, MILRenderer):
+            renderer.set_tile_pred_cache(tile_heatmap, int(stride_px))
 
     def _build_masked_bags_from_features(self, slide_name: str) -> Optional[np.ndarray]:
         """Build a masked bag array from pre-extracted .pt feature files.
@@ -943,27 +986,36 @@ class MILWidget(Widget):
         import torch
 
         if not self._features_dir:
+            sf.log.warning("Cannot build masked bags: no features directory set")
             return None
+
+        sf.log.debug("Building masked bags from %s for slide %s", self._features_dir, slide_name)
 
         pt_path = os.path.join(self._features_dir, f"{slide_name}.pt")
         idx_path = os.path.join(self._features_dir, f"{slide_name}.index.npz")
 
         if not os.path.exists(pt_path):
+            sf.log.warning("Feature file not found: %s", pt_path)
             self.viz.create_toast(f"No feature file found for {slide_name}", icon='error')
             return None
         if not os.path.exists(idx_path):
+            sf.log.warning("Index file not found: %s", idx_path)
             self.viz.create_toast(f"No index file found for {slide_name}", icon='error')
             return None
 
         try:
             feats = torch.load(pt_path, map_location='cpu').numpy()  # (N, D)
             idx = np.load(idx_path)
-            locs = idx['locations']  # (N, 2) pixel coordinates (x, y)
+            # Slideflow's canonical .index.npz stores locations under the
+            # default np.savez key 'arr_0'; some newer extractors also write a
+            # named 'locations' key. Accept either.
+            locs = idx['locations'] if 'locations' in idx.files else idx['arr_0']
 
             # Determine grid stride as the minimum non-zero difference between
             # unique x-coordinates.
             unique_x = np.unique(locs[:, 0])
             stride = int(np.diff(unique_x).min()) if len(unique_x) > 1 else 1
+            self._last_stride_px = stride
 
             # Use absolute grid indices (no x_min/y_min subtraction) so that
             # the grid origin aligns with WSI coordinate (0, 0), matching the
@@ -984,11 +1036,16 @@ class MILWidget(Widget):
             return np.ma.MaskedArray(data=data, mask=mask)
 
         except Exception as e:
-            self.viz.create_toast(f"Error building masked bags: {str(e)}", icon='error')
+            sf.log.error("Error building masked bags from %s: %s", self._features_dir, e)
+            sf.log.error(traceback.format_exc())
+            self.viz.create_toast(f"Error building masked bags: {e}", icon='error')
             return None
 
     def _load_masked_bags(self, slide_name: str) -> Optional[np.ndarray]:
         """Load pre-computed masked bags for a slide.
+
+        Looks for `{features_dir}/{slide_name}.npz`, where `features_dir` is the
+        path shown in the "Features dir" input above the Load and Predict button.
 
         Args:
             slide_name (str): Name of the slide without extension
@@ -996,10 +1053,14 @@ class MILWidget(Widget):
         Returns:
             Optional[np.ndarray]: Loaded masked bags if found, None otherwise
         """
-        # Get the project root directory
-        masked_bags_path = os.path.join(self.viz.P.root, 'masked_bags', f"{slide_name}.npz")
+        if not self._features_dir:
+            sf.log.warning("Cannot load masked bags: no features directory set")
+            return None
+
+        masked_bags_path = os.path.join(self._features_dir, f"{slide_name}.npz")
 
         if not os.path.exists(masked_bags_path):
+            sf.log.warning("Pre-computed masked bags not found: %s", masked_bags_path)
             self.viz.create_toast(
                 f"No pre-computed masked bags found for {slide_name}",
                 icon='error'
@@ -1012,6 +1073,8 @@ class MILWidget(Widget):
             masked_bags = np.ma.MaskedArray(data=data['data'], mask=data['mask'])
             return masked_bags
         except Exception as e:
+            sf.log.error("Error loading masked bags from %s: %s", masked_bags_path, e)
+            sf.log.error(traceback.format_exc())
             self.viz.create_toast(
                 f"Error loading masked bags: {str(e)}",
                 icon='error'
@@ -1019,7 +1082,27 @@ class MILWidget(Widget):
             return None
 
     def _predict_from_masked_bags(self):
-        """Generate prediction using pre-computed masked bags."""
+        """Generate prediction using pre-computed masked bags.
+
+        State cleanup (clearing _generating/_triggered/_active_action, the
+        sticky toast, and the spinner button text) is handled by
+        _refresh_generating_prediction once the worker thread terminates —
+        matching the _predict_slide pattern. Do not clear that state here, or
+        the main loop will skip the refresh and the UI will stay stuck in
+        "Loading..." after this function returns.
+        """
+        try:
+            self._predict_from_masked_bags_impl()
+        except Exception as e:
+            sf.log.error("Load and Predict failed: %s", e)
+            sf.log.error(traceback.format_exc())
+            self.viz.create_toast(
+                f"Load and Predict failed: {e}",
+                icon='error'
+            )
+
+    def _predict_from_masked_bags_impl(self):
+        import time as _time
         if not self.viz.wsi:
             return
 
@@ -1031,13 +1114,22 @@ class MILWidget(Widget):
         slide_name = os.path.splitext(os.path.basename(self.viz.wsi.path))[0]
 
         # Load pre-computed masked bags: prefer feature dir, fall back to masked_bags/
+        self._last_stride_px = None
+        _t0 = _time.time()
         masked_bags = self._build_masked_bags_from_features(slide_name)
         if masked_bags is None:
             masked_bags = self._load_masked_bags(slide_name)
+            # Fall back to the WSI's tile stride (assumes the saved bags were
+            # extracted with the same stride as the currently loaded slide).
+            if masked_bags is not None and self.viz.wsi is not None:
+                self._last_stride_px = int(getattr(self.viz.wsi, 'full_stride', 0)) or None
+        sf.log.info("[L&P] bags loaded in %.2fs", _time.time() - _t0)
 
         if masked_bags is None:
-            self._generating = False
-            self._triggered = False
+            sf.log.error(
+                "Load and Predict aborted: could not build or load masked bags for slide %s",
+                slide_name,
+            )
             return
 
         # Reshape bags
@@ -1067,8 +1159,10 @@ class MILWidget(Widget):
             return
 
         # Generate slide-level prediction and attention
+        _t0 = _time.time()
         self.predictions, self.attention = self._calculate_predictions(bags)
-        
+        sf.log.info("[L&P] slide-level predict done in %.2fs", _time.time() - _t0)
+
         if self.attention:
             self.attention = self.attention[0]
 
@@ -1097,6 +1191,7 @@ class MILWidget(Widget):
         # Generate tile-level predictions in a single batched forward pass.
         # Reshape (1, N, D) → (N, 1, D) and call run_inference once instead
         # of N times (as predict_from_bags would do).
+        _t0 = _time.time()
         import torch
         from slideflow.mil.eval import run_inference
         device = self.viz._render_manager.device
@@ -1112,8 +1207,11 @@ class MILWidget(Widget):
                 use_lens=use_lens,
             )
         tile_predictions = tile_preds.cpu().numpy()
+        sf.log.info("[L&P] per-tile inference done in %.2fs (N=%d)",
+                    _time.time() - _t0, tile_predictions.shape[0])
 
         # Create heatmaps from tile predictions and attention.
+        _t0 = _time.time()
         if len(tile_predictions.shape) == 2:
             tile_heatmap = np.stack([
                 _reshape_as_heatmap(tile_predictions[:, n], valid_indices, original_shape, masked_bags.shape[0])
@@ -1136,3 +1234,9 @@ class MILWidget(Widget):
             self.render_dual_heatmap(att_heatmap, tile_heatmap)
         else:
             self.render_tile_prediction_heatmap(tile_heatmap)
+        sf.log.info("[L&P] heatmap render done in %.2fs", _time.time() - _t0)
+
+        # Cache the per-tile predictions on the renderer so the side panel
+        # can show per-tile predictions even though no extractor was loaded.
+        self._push_tile_pred_cache(tile_heatmap, self._last_stride_px)
+        sf.log.info("[L&P] complete")

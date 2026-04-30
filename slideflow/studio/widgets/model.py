@@ -7,7 +7,12 @@ from array import array
 from collections import defaultdict
 from slideflow.util import isnumeric
 
-from ..utils import EasyDict, LEFT_MOUSE_BUTTON, compute_hierarchical_final_prediction
+from ..utils import (
+    EasyDict,
+    LEFT_MOUSE_BUTTON,
+    compute_hierarchical_final_prediction,
+    compute_classification_final_prediction,
+)
 from ..gui import imgui_utils
 
 # -----------------------------------------------------------------------------
@@ -27,6 +32,7 @@ def _draw_tile_pred_result(
     pred_array: np.ndarray,
     uq_array: Optional[np.ndarray] = None,
     *,
+    is_hierarchical: bool = False,
     uncertainty_color: Optional[List[int]] = None,
     uncertainty_range: Optional[Tuple[float, float]] = None,
     uncertainty_label: str = 'Uncertainty'
@@ -43,8 +49,10 @@ def _draw_tile_pred_result(
     imgui.text_colored(outcome, *viz.theme.dim)
 
     # Prediction string
-    if is_classification:
+    if is_hierarchical:
         pred_str = compute_hierarchical_final_prediction(pred_array)
+    elif is_classification:
+        pred_str = compute_classification_final_prediction(pred_array, labels=labels)
     else:
         pred_str = f'{pred_array:.3f}'
     imgui.same_line(imgui.get_content_region_max()[0] - viz.spacing - imgui.calc_text_size(pred_str).x)

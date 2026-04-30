@@ -76,17 +76,35 @@ def compute_hierarchical_final_prediction(pred):
         b_idx = np.argmax(b_probs)
         return f'B{b_idx+1}'
 
+def compute_classification_final_prediction(pred, labels=None):
+    """Standard (non-hierarchical) classification: argmax → label string.
+
+    Args:
+        pred: 1D array-like of class scores/probabilities.
+        labels: Optional dict ({"0": name, ...}) or list of class names. If
+            absent or missing the index, falls back to ``"Class {i}"``.
+    """
+    idx = int(np.argmax(pred))
+    if isinstance(labels, dict):
+        return labels.get(str(idx), f'Class {idx}')
+    if isinstance(labels, (list, tuple)) and idx < len(labels):
+        return labels[idx]
+    return f'Class {idx}'
+
+
 def prediction_to_string(
     predictions: np.ndarray,
     outcomes: List[str],
-    is_classification: bool
+    is_classification: bool,
+    is_hierarchical: bool = False,
 ) -> str:
     """Convert a prediction array to a human-readable string."""
     #TODO: support multi-outcome models
-    if is_classification:
+    if is_hierarchical:
         return f'{compute_hierarchical_final_prediction(predictions)}'
-    else:
-        return f'{predictions[0]:.2f}'
+    if is_classification:
+        return f'{compute_classification_final_prediction(predictions, labels=outcomes)}'
+    return f'{predictions[0]:.2f}'
 
 
 def _load_umap_encoders(path, model) -> EasyDict:

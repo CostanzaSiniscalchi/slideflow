@@ -27,8 +27,18 @@ class MILRenderer(Renderer):
         self.mil_config = None
         self.extractor = None
         self.normalizer = None
+        self._tile_pred_cache = None  # (n_rows, n_cols) or (n_rows, n_cols, n_outcomes)
+        self._tile_pred_stride = None  # pixel stride between tile origins
+        self._last_xy = (None, None)
         if mil_model_path:
             self.load_model(mil_model_path, load_extractor=load_extractor)
+
+    def set_tile_pred_cache(self, grid: Optional[np.ndarray], stride_px: Optional[int]) -> None:
+        """Cache per-tile predictions so they can be looked up by tile location
+        when no feature extractor is loaded. Pass ``None`` for both args to clear.
+        """
+        self._tile_pred_cache = grid
+        self._tile_pred_stride = stride_px
 
     def load_model(self, mil_model_path: str, device: Optional[str] = None, load_extractor: bool = True) -> None:
         sf.log.info("Loading MIL model at {}".format(mil_model_path))
@@ -107,6 +117,9 @@ class MILRenderer(Renderer):
                 return
 
         if self.extractor is None:
+            # Fallback: look up the prediction from the cached tile-prediction
+            # grid (populated by "Load and Predict" when no extractor is loaded).
+            self._lookup_cached_tile_prediction(res)
             return
 
         bag = self._convert_img_to_bag(img, res)
@@ -121,9 +134,32 @@ class MILRenderer(Renderer):
         res.predictions = preds[0]
         res.uncertainty = None if att is None else att
 
+    def _lookup_cached_tile_prediction(self, res) -> None:
+        """Look up a cached tile prediction at the current (x, y) location."""
+        if self._tile_pred_cache is None or self._tile_pred_stride is None:
+            return
+        x, y = self._last_xy
+        if x is None or y is None:
+            return
+        stride = self._tile_pred_stride
+        if stride <= 0:
+            return
+        row = int(y) // stride
+        col = int(x) // stride
+        grid = self._tile_pred_cache
+        if not (0 <= row < grid.shape[0] and 0 <= col < grid.shape[1]):
+            return
+        vals = grid[row, col]
+        if np.any(np.isnan(vals)):
+            return
+        res.predictions = np.asarray(vals)
+        res.uncertainty = None
+
     def _render_impl(self, res, *args, **kwargs):
         if self.mil_model is not None:
             kwargs['use_model'] = True
+        # Stash current tile coordinates for cache lookup in _run_models.
+        self._last_xy = (kwargs.get('x'), kwargs.get('y'))
         super()._render_impl(res, *args, **kwargs)
 
 

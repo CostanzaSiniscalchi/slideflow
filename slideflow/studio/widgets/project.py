@@ -288,6 +288,8 @@ class ProjectWidget:
                     has_model = True
                     if not dryrun:
                         clicked, _state = imgui.menu_item(item.name)
+                        if imgui.is_item_hovered():
+                            imgui.set_tooltip(f"{item.name}\n{item.path}")
                         if clicked:
                             self._load_mil_from_browser(item.path)
 
