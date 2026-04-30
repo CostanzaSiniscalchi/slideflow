@@ -1543,12 +1543,15 @@ class Dataset:
             enable_downsample (bool): Enable downsampling for slides.
                 This may result in corrupted image tiles if downsampled slide
                 layers are corrupted or incomplete. Defaults to True.
-            roi_method (str): Either 'inside', 'outside', 'auto', or 'ignore'.
+            roi_method (str): Either 'inside', 'outside', 'auto',
+                'outside_auto', or 'ignore'.
                 Determines how ROIs are used to extract tiles.
                 If 'inside' or 'outside', will extract tiles in/out of an ROI,
                 and skip the slide if an ROI is not available.
                 If 'auto', will extract tiles inside an ROI if available,
                 and across the whole-slide if no ROI is found.
+                If 'outside_auto', will extract tiles outside an ROI if
+                available, and across the whole-slide if no ROI is found.
                 If 'ignore', will extract tiles across the whole-slide
                 regardless of whether an ROI is available.
                 Defaults to 'auto'.

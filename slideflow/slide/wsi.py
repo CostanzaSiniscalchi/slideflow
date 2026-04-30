@@ -88,12 +88,15 @@ class WSI:
                 files. Defaults to None.
             rois (list(str)): Alternatively, a list of ROI paths can be
                 explicitly provided. Defaults to None.
-            roi_method (str): Either 'inside', 'outside', 'auto', or 'ignore'.
+            roi_method (str): Either 'inside', 'outside', 'auto',
+                'outside_auto', or 'ignore'.
                 Determines how ROIs are used to extract tiles.
                 If 'inside' or 'outside', will extract tiles in/out of an ROI,
                 and raise errors.MissingROIError if an ROI is not available.
                 If 'auto', will extract tiles inside an ROI if available,
                 and across the whole-slide if no ROI is found.
+                If 'outside_auto', will extract tiles outside an ROI if
+                available, and across the whole-slide if no ROI is found.
                 If 'ignore', will extract tiles across the whole-slide
                 regardless of whether an ROI is available.
                 Defaults to 'auto'.
@@ -271,13 +274,16 @@ class WSI:
             )
         elif not len(self.rois):
             info_msg = f"No ROI for {self.name}, using whole slide."
-            if verbose and roi_method == 'auto':
+            if verbose and roi_method in ('auto', 'outside_auto'):
                 log.info(info_msg)
             else:
                 log.debug(info_msg)
         elif len(self.rois) and roi_method == 'auto':
             log.debug(f"Slide {self.name}: extracting tiles from inside ROI.")
             self.roi_method = 'inside'
+        elif len(self.rois) and roi_method == 'outside_auto':
+            log.debug(f"Slide {self.name}: extracting tiles from outside ROI.")
+            self.roi_method = 'outside'
 
         # Build coordinate grid
         self.process_rois()
@@ -2649,6 +2655,8 @@ class WSI:
         self.rois.append(roi)
         if self.roi_method == 'auto':
             self.roi_method = 'inside'
+        elif self.roi_method == 'outside_auto':
+            self.roi_method = 'outside'
         if process:
             self.process_rois()
         for i, _roi in enumerate(self.rois):
@@ -2774,6 +2782,8 @@ class WSI:
             self.process_rois()
         if self.roi_method == 'auto':
             self.roi_method = 'inside'
+        elif self.roi_method == 'outside_auto':
+            self.roi_method = 'outside'
         return len(self.rois)
 
     def masked_thumb(self, background: str = 'white', **kwargs) -> np.ndarray:
