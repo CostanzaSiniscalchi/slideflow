@@ -1,7 +1,9 @@
+import os
 import torch
 import pandas as pd
 import numpy as np
 import numpy.typing as npt
+from os.path import join
 from typing import List, Optional, Union, Tuple
 from sklearn.preprocessing import OneHotEncoder
 from sklearn import __version__ as sklearn_version
@@ -10,13 +12,14 @@ from fastai.vision.all import (
     DataLoaders, Learner, SaveModelCallback, CSVLogger
 )
 
+import slideflow as sf
 from slideflow import log
 from slideflow.model import torch_utils
 from .._params import TrainerConfig
 
 # -----------------------------------------------------------------------------
 
-def train(learner, config, callbacks=None):
+def train(learner, config, callbacks=None, outdir=None):
     """Train an attention-based multi-instance learning model with FastAI.
 
     Args:
@@ -32,20 +35,38 @@ def train(learner, config, callbacks=None):
     ]
     if callbacks:
         cbs += callbacks
+    lr_auto = config.lr is None
     if config.fit_one_cycle:
-        if config.lr is None:
+        if lr_auto:
             lr = learner.lr_find().valley
             log.info(f"Using auto-detected learning rate: {lr}")
         else:
             lr = config.lr
         learner.fit_one_cycle(n_epoch=config.epochs, lr_max=lr, cbs=cbs)
     else:
-        if config.lr is None:
+        if lr_auto:
             lr = learner.lr_find().valley
             log.info(f"Using auto-detected learning rate: {lr}")
         else:
             lr = config.lr
         learner.fit(n_epoch=config.epochs, lr=lr, wd=config.wd, cbs=cbs)
+
+    if outdir is not None:
+        try:
+            lrs_per_batch = [float(x) for x in learner.recorder.lrs]
+        except Exception as e:
+            log.warning(f"Could not record per-batch LR schedule: {e}")
+            lrs_per_batch = []
+        lr_schedule = {
+            'lr_max': float(lr),
+            'lr_auto': lr_auto,
+            'fit_one_cycle': bool(config.fit_one_cycle),
+            'epochs': int(config.epochs),
+            'lrs_per_batch': lrs_per_batch,
+        }
+        sf.util.write_json(lr_schedule, join(outdir, 'lr_schedule.json'))
+        log.info(f"LR schedule saved to [green]{join(outdir, 'lr_schedule.json')}[/]")
+
     return learner
 
 # -----------------------------------------------------------------------------

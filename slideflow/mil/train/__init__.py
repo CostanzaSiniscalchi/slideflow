@@ -406,7 +406,7 @@ def _train_mil(
     _log_mil_params(config, outcomes, unique, bags, n_in, n_out, outdir)
 
     # Train.
-    _fastai.train(learner, config)
+    _fastai.train(learner, config, outdir=outdir)
 
     # Generate validation predictions.
     df, attention = predict_mil(
@@ -495,7 +495,7 @@ def _train_multimodal_mil(
     _log_mil_params(config, outcomes, unique, bags, n_in, n_out, outdir)
 
     # Execute training.
-    _fastai.train(learner, config)
+    _fastai.train(learner, config, outdir=outdir)
 
     df, attention = predict_multimodal_mil(
         learner.model,
