@@ -11,11 +11,28 @@ from packaging import version
 from fastai.vision.all import (
     DataLoaders, Learner, SaveModelCallback, CSVLogger
 )
+from fastai.callback.core import Callback
 
 import slideflow as sf
 from slideflow import log
 from slideflow.model import torch_utils
 from .._params import TrainerConfig
+
+class SaveEveryEpochCallback(Callback):
+    """Callback to save model checkpoint at every epoch."""
+
+    def __init__(self, dirname='checkpoints'):
+        self.dirname = dirname
+
+    def after_epoch(self):
+        # Create checkpoints directory inside the models folder
+        # FastAI saves to path/model_dir, so we put checkpoints there too
+        checkpoint_path = self.learn.path / self.learn.model_dir / self.dirname
+        checkpoint_path.mkdir(parents=True, exist_ok=True)
+        # Save checkpoint with epoch number
+        filepath = checkpoint_path / f'epoch_{self.epoch}.pth'
+        torch.save(self.learn.model.state_dict(), filepath)
+        log.debug(f"Saved checkpoint: {filepath}")
 
 # -----------------------------------------------------------------------------
 
@@ -33,6 +50,8 @@ def train(learner, config, callbacks=None, outdir=None):
         SaveModelCallback(fname=f"best_valid", monitor=config.save_monitor),
         CSVLogger(),
     ]
+    if config.save_every_epoch:
+        cbs.append(SaveEveryEpochCallback(dirname='checkpoints'))
     if callbacks:
         cbs += callbacks
     lr_auto = config.lr is None
