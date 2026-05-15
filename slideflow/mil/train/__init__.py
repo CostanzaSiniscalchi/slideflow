@@ -406,7 +406,16 @@ def _train_mil(
     _log_mil_params(config, outcomes, unique, bags, n_in, n_out, outdir)
 
     # Train.
-    _fastai.train(learner, config, outdir=outdir)
+    extra_cbs = []
+    if config.save_every_epoch:
+        from ._fastai import PredictEveryEpochCallback
+        extra_cbs.append(PredictEveryEpochCallback(
+            val_dataset=val_dataset,
+            outcomes=outcomes,
+            val_bags=val_bags,
+            config=config,
+        ))
+    _fastai.train(learner, config, callbacks=extra_cbs, outdir=outdir)
 
     # Generate validation predictions.
     df, attention = predict_mil(

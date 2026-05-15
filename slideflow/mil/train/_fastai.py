@@ -34,6 +34,40 @@ class SaveEveryEpochCallback(Callback):
         torch.save(self.learn.model.state_dict(), filepath)
         log.debug(f"Saved checkpoint: {filepath}")
 
+
+class PredictEveryEpochCallback(Callback):
+    """Run predict_mil on the val set after each epoch and save parquet."""
+
+    def __init__(self, val_dataset, outcomes, val_bags, config, dirname='checkpoints'):
+        self.val_dataset = val_dataset
+        self.outcomes    = outcomes
+        self.val_bags    = val_bags
+        self.config      = config
+        self.dirname     = dirname
+
+    def after_epoch(self):
+        from slideflow.mil.eval import predict_mil
+        out_dir = self.learn.path / self.learn.model_dir / self.dirname
+        out_dir.mkdir(parents=True, exist_ok=True)
+        was_training = self.learn.model.training
+        self.learn.model.eval()
+        try:
+            df = predict_mil(
+                self.learn.model,
+                dataset=self.val_dataset,
+                config=self.config,
+                outcomes=self.outcomes,
+                bags=self.val_bags,
+                attention=False,
+                uq=False,
+            )
+            df.to_parquet(out_dir / f'predictions_epoch_{self.epoch}.parquet')
+        except Exception as e:
+            log.warning(f"Per-epoch prediction failed at epoch {self.epoch}: {e}")
+        finally:
+            if was_training:
+                self.learn.model.train()
+
 # -----------------------------------------------------------------------------
 
 def train(learner, config, callbacks=None, outdir=None):
