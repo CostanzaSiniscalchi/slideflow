@@ -741,7 +741,8 @@ class WSI:
 
     def _log_slide_summary(self) -> None:
         """Log slide information (MPP, ROIs, grid shape, number of tiles)."""
-        mpp_roi_msg = f'{self.mpp} um/px | {len(self.rois)} ROI(s)'
+        mpp_roi_msg = (f'{self.mpp} um/px | {len(self.rois)} ROI(s) '
+                       f'| roi_method={self.roi_method}')
         size_msg = f'Size: {self.dimensions[0]} x {self.dimensions[1]}'
         log.debug(f"{self.shortname}: Slide info: {mpp_roi_msg} | {size_msg}")
         grid_msg = f"{self.shortname}: Grid shape: {self.grid.shape} "
@@ -2740,6 +2741,11 @@ class WSI:
                     if simplify_tolerance is not None:
                         roi.simplify(simplify_tolerance)
                     self.rois.append(roi)
+        if len(self.rois):
+            if self.roi_method == 'auto':
+                self.roi_method = 'inside'
+            elif self.roi_method == 'outside_auto':
+                self.roi_method = 'outside'
         if process:
             self.process_rois()
         log.debug(f"Loaded ROIs from {path}")
@@ -2778,12 +2784,13 @@ class WSI:
                 if skip_invalid:
                     log.warn("Skipping invalid ROI ({}): {}".format(roi_name, e))
 
+        if len(self.rois):
+            if self.roi_method == 'auto':
+                self.roi_method = 'inside'
+            elif self.roi_method == 'outside_auto':
+                self.roi_method = 'outside'
         if process:
             self.process_rois()
-        if self.roi_method == 'auto':
-            self.roi_method = 'inside'
-        elif self.roi_method == 'outside_auto':
-            self.roi_method = 'outside'
         return len(self.rois)
 
     def masked_thumb(self, background: str = 'white', **kwargs) -> np.ndarray:
@@ -2969,6 +2976,17 @@ class WSI:
             int: Number of ROIs processed.
 
         """
+        # Resolve the 'auto'/'outside_auto' methods to a concrete method now
+        # that ROIs are present. This must happen before _build_coord(), which
+        # filters the grid based on self.roi_method; the literal 'outside_auto'
+        # matches none of the filter branches and would leave the grid
+        # unfiltered (i.e. whole-slide extraction).
+        if len(self.rois):
+            if self.roi_method == 'auto':
+                self.roi_method = 'inside'
+            elif self.roi_method == 'outside_auto':
+                self.roi_method = 'outside'
+
         # Load annotations as shapely.geometry objects.
         if self.roi_method != 'ignore':
             self._find_and_process_holes()
